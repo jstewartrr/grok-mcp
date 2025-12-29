@@ -1,7 +1,8 @@
 """
-Grok MCP Server for Sovereign Mind v1.1.0
+Grok MCP Server for Sovereign Mind v1.2.0
 ==========================================
 HTTP JSON transport for the SM Gateway.
+Updated: grok-3 model (grok-2 deprecated)
 """
 
 import os
@@ -28,7 +29,7 @@ TOOLS = [
             "properties": {
                 "message": {"type": "string", "description": "The message to send to Grok"},
                 "system_prompt": {"type": "string", "description": "Optional system prompt", "default": "You are Grok, a helpful AI assistant."},
-                "model": {"type": "string", "description": "Model: grok-2-latest, grok-2-1212, grok-beta", "default": "grok-2-latest"}
+                "model": {"type": "string", "description": "Model: grok-3, grok-3-fast", "default": "grok-3"}
             },
             "required": ["message"]
         }
@@ -59,7 +60,7 @@ TOOLS = [
     }
 ]
 
-def call_xai(messages, model="grok-2-latest"):
+def call_xai(messages, model="grok-3"):
     """Call xAI Grok API"""
     if not XAI_API_KEY:
         return {"error": "XAI_API_KEY not configured"}
@@ -90,7 +91,7 @@ def handle_tool_call(name, arguments):
     if name == "grok_chat":
         message = arguments.get("message", "")
         system = arguments.get("system_prompt", "You are Grok, a helpful AI assistant.")
-        model = arguments.get("model", "grok-2-latest")
+        model = arguments.get("model", "grok-3")
         
         result = call_xai([
             {"role": "system", "content": system},
@@ -155,7 +156,7 @@ def process_mcp_message(data):
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "grok-mcp", "version": "1.1.0"}
+                "serverInfo": {"name": "grok-mcp", "version": "1.2.0"}
             }
         }
     
@@ -186,10 +187,11 @@ def health():
     return jsonify({
         "status": "healthy",
         "service": "grok-mcp",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "transport": "HTTP/JSON",
         "api_configured": bool(XAI_API_KEY),
-        "tools": len(TOOLS)
+        "tools": len(TOOLS),
+        "default_model": "grok-3"
     })
 
 @app.route("/mcp", methods=["POST"])
@@ -206,6 +208,6 @@ def mcp_handler():
         return jsonify({"jsonrpc": "2.0", "id": 1, "error": {"code": -32603, "message": str(e)}}), 500
 
 if __name__ == "__main__":
-    logger.info("Grok MCP Server v1.1.0 starting...")
+    logger.info("Grok MCP Server v1.2.0 starting...")
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
