@@ -1,5 +1,5 @@
 """
-Grok MCP Server for Sovereign Mind v2.0.0
+Grok MCP Server for Sovereign Mind v2.0.2
 ==========================================
 HTTP JSON transport for the SM Gateway.
 Features:
@@ -71,6 +71,7 @@ def log_conversation(user_message, grok_response, system_prompt=None, model="gro
     
     try:
         cursor = conn.cursor()
+        cursor.execute("USE WAREHOUSE COMPUTE_WH")
         cursor.execute("""
             INSERT INTO SOVEREIGN_MIND.RAW.GROK_CHAT_LOG 
             (SESSION_ID, USER_MESSAGE, SYSTEM_PROMPT, GROK_RESPONSE, MODEL, RESPONSE_TIME_MS, TOOL_NAME)
@@ -98,6 +99,7 @@ def query_hive_mind(limit=10, workstream=None, category=None):
     
     try:
         cursor = conn.cursor()
+        cursor.execute("USE WAREHOUSE COMPUTE_WH")
         query = """
             SELECT SOURCE, CATEGORY, WORKSTREAM, SUMMARY, CREATED_AT, PRIORITY, STATUS
             FROM SOVEREIGN_MIND.RAW.HIVE_MIND
@@ -137,6 +139,7 @@ def query_snowflake(sql, limit=100):
     
     try:
         cursor = conn.cursor()
+        cursor.execute("USE WAREHOUSE COMPUTE_WH")
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchmany(limit)
@@ -397,6 +400,7 @@ Data:
         
         try:
             cursor = conn.cursor()
+            cursor.execute("USE WAREHOUSE COMPUTE_WH")
             if search:
                 cursor.execute("""
                     SELECT CREATED_AT, TOOL_NAME, USER_MESSAGE, GROK_RESPONSE, MODEL
@@ -447,7 +451,7 @@ def process_mcp_message(data):
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "grok-mcp", "version": "2.0.0"}
+                "serverInfo": {"name": "grok-mcp", "version": "2.0.2"}
             }
         }
     
@@ -483,7 +487,7 @@ def health():
     return jsonify({
         "status": "healthy",
         "service": "grok-mcp",
-        "version": "2.0.0",
+        "version": "2.0.2",
         "transport": "HTTP/JSON",
         "api_configured": bool(XAI_API_KEY),
         "snowflake_connected": sf_connected,
@@ -515,7 +519,7 @@ def mcp_handler():
 # =============================================================================
 
 if __name__ == "__main__":
-    logger.info("Grok MCP Server v2.0.0 starting...")
+    logger.info("Grok MCP Server v2.0.2 starting...")
     logger.info("Features: Auto-logging, Hive Mind sync, Snowflake queries")
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
