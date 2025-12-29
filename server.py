@@ -52,6 +52,7 @@ def get_snowflake_connection():
                 password=SNOWFLAKE_PASSWORD,
                 database=SNOWFLAKE_DATABASE,
                 warehouse=SNOWFLAKE_WAREHOUSE,
+                autocommit=True,
                 role=SNOWFLAKE_ROLE
             )
             logger.info("Snowflake connection established")
@@ -71,7 +72,7 @@ def log_conversation(user_message, grok_response, system_prompt=None, model="gro
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO SOVEREIGN_MIND.RAW.GROK_CONVERSATIONS 
+            INSERT INTO SOVEREIGN_MIND.RAW.GROK_CHAT_LOG 
             (SESSION_ID, USER_MESSAGE, SYSTEM_PROMPT, GROK_RESPONSE, MODEL, RESPONSE_TIME_MS, TOOL_NAME)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (
@@ -399,7 +400,7 @@ Data:
             if search:
                 cursor.execute("""
                     SELECT CREATED_AT, TOOL_NAME, USER_MESSAGE, GROK_RESPONSE, MODEL
-                    FROM SOVEREIGN_MIND.RAW.GROK_CONVERSATIONS
+                    FROM SOVEREIGN_MIND.RAW.GROK_CHAT_LOG
                     WHERE USER_MESSAGE ILIKE %s OR GROK_RESPONSE ILIKE %s
                     ORDER BY CREATED_AT DESC
                     LIMIT %s
@@ -407,7 +408,7 @@ Data:
             else:
                 cursor.execute("""
                     SELECT CREATED_AT, TOOL_NAME, USER_MESSAGE, GROK_RESPONSE, MODEL
-                    FROM SOVEREIGN_MIND.RAW.GROK_CONVERSATIONS
+                    FROM SOVEREIGN_MIND.RAW.GROK_CHAT_LOG
                     ORDER BY CREATED_AT DESC
                     LIMIT %s
                 """, (limit,))
