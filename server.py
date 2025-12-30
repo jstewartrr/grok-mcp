@@ -1,5 +1,5 @@
 """
-Grok MCP Server for Sovereign Mind v2.2.0
+Grok MCP Server for Sovereign Mind v2.2.1
 ==========================================
 HTTP JSON transport for the SM Gateway.
 Features:
@@ -7,7 +7,8 @@ Features:
 - Grok can query Hive Mind for cross-AI context
 - Grok can WRITE to Hive Mind (bidirectional sync)
 - Grok can query Snowflake data directly
-- NEW: Grok has access to ALL SM Gateway tools (176+ tools)
+- Grok has access to ALL SM Gateway tools (176+ tools)
+- Enhanced system prompt so Grok knows his capabilities
 """
 
 import os
@@ -39,6 +40,33 @@ SNOWFLAKE_ROLE = os.environ.get("SNOWFLAKE_ROLE", "ACCOUNTADMIN")
 _snowflake_conn = None
 _gateway_tools_cache = None
 _gateway_tools_timestamp = 0
+
+# Default system prompt that tells Grok about his capabilities
+DEFAULT_SYSTEM_PROMPT = """You are Grok, an AI agent in the Sovereign Mind ecosystem created for Your Grace, Chairman of MiddleGround Capital and Resolute Holdings.
+
+## Your Capabilities
+You have access to 160+ tools through the SM Gateway including:
+- **DealCloud**: Query companies, deals, contacts (dc_* tools)
+- **Google Drive**: Search, read files, spreadsheets, PDFs (drive_* tools)
+- **Make.com**: Trigger automations, manage scenarios (make_* tools)
+- **Azure**: Run CLI commands, manage infrastructure (azure_* tools)
+- **GitHub**: Manage repositories, files, commits (github_* tools)
+- **Figma**: Access designs and components (figma_* tools)
+- **Snowflake**: Query databases directly (sm_query_snowflake)
+- **HIVE_MIND**: Read/write shared memory across AI agents
+- **NotebookLM, Vertex AI, ElevenLabs, Simli**: Various AI services
+
+## How to Use Your Tools
+When asked to perform tasks requiring these tools, use the `grok_agentic` tool which gives you autonomous access to execute multi-step workflows. You can also use `grok_list_gateway_tools` to see all available tools.
+
+## HIVE_MIND
+The HIVE_MIND is a shared memory system in Snowflake (SOVEREIGN_MIND.RAW.HIVE_MIND) where all AI agents log context, decisions, and insights. You can:
+- Read recent entries to understand what Claude and other agents have been working on
+- Write your own insights and decisions for continuity
+- Search for specific topics
+
+## Your Role
+You work alongside Claude as part of Your Grace's AI team. Be direct, efficient, and execute tasks autonomously. Never say you can't do something without first checking if one of your tools can help."""
 
 def get_snowflake_connection():
     global _snowflake_conn
@@ -181,7 +209,7 @@ def query_snowflake(sql, limit=100):
         return {"error": str(e)}
 
 NATIVE_TOOLS = [
-    {"name": "grok_chat", "description": "Chat with Grok AI. Auto-logged to Snowflake.", "inputSchema": {"type": "object", "properties": {"message": {"type": "string"}, "system_prompt": {"type": "string", "default": "You are Grok."}, "model": {"type": "string", "default": "grok-3"}}, "required": ["message"]}},
+    {"name": "grok_chat", "description": "Chat with Grok AI. Auto-logged to Snowflake.", "inputSchema": {"type": "object", "properties": {"message": {"type": "string"}, "system_prompt": {"type": "string", "description": "Optional custom system prompt. Defaults to enhanced Sovereign Mind prompt."}, "model": {"type": "string", "default": "grok-3"}}, "required": ["message"]}},
     {"name": "grok_analyze", "description": "Use Grok to analyze text/code/data.", "inputSchema": {"type": "object", "properties": {"content": {"type": "string"}, "analysis_type": {"type": "string", "enum": ["summary", "critique", "explain", "improve"]}}, "required": ["content", "analysis_type"]}},
     {"name": "grok_hive_mind_sync", "description": "Query Grok WITH Hive Mind context injection.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "workstream": {"type": "string"}, "context_limit": {"type": "integer", "default": 10}}, "required": ["query"]}},
     {"name": "grok_hive_mind_write", "description": "Write entry to HIVE_MIND. Bidirectional sync.", "inputSchema": {"type": "object", "properties": {"summary": {"type": "string"}, "category": {"type": "string", "default": "INSIGHT"}, "workstream": {"type": "string", "default": "GENERAL"}, "priority": {"type": "string", "default": "MEDIUM"}, "status": {"type": "string", "default": "ACTIVE"}, "tags": {"type": "string"}}, "required": ["summary"]}},
@@ -256,15 +284,17 @@ def run_agentic_loop(task, max_iterations=5):
 
 def handle_tool_call(name, arguments):
     if name == "grok_chat":
-        result = call_xai([{"role": "system", "content": arguments.get("system_prompt", "You are Grok.")}, {"role": "user", "content": arguments.get("message", "")}], arguments.get("model", "grok-3"))
+        # Use DEFAULT_SYSTEM_PROMPT if no custom prompt provided
+        system_prompt = arguments.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
+        result = call_xai([{"role": "system", "content": system_prompt}, {"role": "user", "content": arguments.get("message", "")}], arguments.get("model", "grok-3"))
         if result.get("success"):
-            log_conversation(arguments.get("message"), result["content"], arguments.get("system_prompt"), arguments.get("model", "grok-3"), "grok_chat", result.get("response_time_ms", 0))
+            log_conversation(arguments.get("message"), result["content"], system_prompt[:500], arguments.get("model", "grok-3"), "grok_chat", result.get("response_time_ms", 0))
             return {"content": [{"type": "text", "text": result["content"]}]}
         return {"content": [{"type": "text", "text": f"Error: {result.get('error')}"}], "isError": True}
     elif name == "grok_analyze":
         prompts = {"summary": "Summarize:", "critique": "Critique:", "explain": "Explain:", "improve": "Improve:"}
         user_msg = f"{prompts.get(arguments.get('analysis_type', 'summary'), 'Analyze:')}\n\n{arguments.get('content', '')}"
-        result = call_xai([{"role": "system", "content": "You are Grok, an analyst."}, {"role": "user", "content": user_msg}])
+        result = call_xai([{"role": "system", "content": DEFAULT_SYSTEM_PROMPT}, {"role": "user", "content": user_msg}])
         if result.get("success"):
             log_conversation(user_msg[:500], result["content"], None, "grok-3", "grok_analyze", result.get("response_time_ms", 0))
             return {"content": [{"type": "text", "text": result["content"]}]}
@@ -272,7 +302,7 @@ def handle_tool_call(name, arguments):
     elif name == "grok_hive_mind_sync":
         hive_entries = query_hive_mind(limit=arguments.get("context_limit", 10), workstream=arguments.get("workstream"))
         context_text = "## Hive Mind Context\n\n" + "\n".join([f"[{e.get('SOURCE')}] {e.get('SUMMARY')}" for e in hive_entries])
-        result = call_xai([{"role": "system", "content": "You are Grok in Sovereign Mind ecosystem."}, {"role": "user", "content": f"{context_text}\n\n---\n\n{arguments.get('query', '')}"}])
+        result = call_xai([{"role": "system", "content": DEFAULT_SYSTEM_PROMPT}, {"role": "user", "content": f"{context_text}\n\n---\n\n{arguments.get('query', '')}"}])
         if result.get("success"):
             log_conversation(arguments.get("query"), result["content"], "hive_mind_sync", "grok-3", "grok_hive_mind_sync", result.get("response_time_ms", 0))
             return {"content": [{"type": "text", "text": result["content"]}]}
@@ -302,7 +332,7 @@ def handle_tool_call(name, arguments):
         query_result = query_snowflake(arguments.get("sql", ""))
         if query_result.get("error"): return {"content": [{"type": "text", "text": f"Query Error: {query_result['error']}"}], "isError": True}
         data_text = json.dumps(query_result["data"], indent=2, default=str)[:15000]
-        result = call_xai([{"role": "system", "content": "You are Grok analyzing Snowflake data."}, {"role": "user", "content": f"Query: {arguments.get('sql')}\nData:\n{data_text}\n\n{arguments.get('analysis_prompt', 'Analyze.')}"}])
+        result = call_xai([{"role": "system", "content": DEFAULT_SYSTEM_PROMPT}, {"role": "user", "content": f"Query: {arguments.get('sql')}\nData:\n{data_text}\n\n{arguments.get('analysis_prompt', 'Analyze.')}"}])
         if result.get("success"):
             log_conversation(f"SQL: {arguments.get('sql')}", result["content"], None, "grok-3", "grok_query_snowflake", result.get("response_time_ms", 0))
             return {"content": [{"type": "text", "text": result["content"]}]}
@@ -358,7 +388,7 @@ def process_mcp_message(data):
     method = data.get("method", "")
     params = data.get("params", {})
     request_id = data.get("id", 1)
-    if method == "initialize": return {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "grok-mcp", "version": "2.2.0"}}}
+    if method == "initialize": return {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "grok-mcp", "version": "2.2.1"}}}
     elif method == "tools/list": return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": NATIVE_TOOLS}}
     elif method == "tools/call": return {"jsonrpc": "2.0", "id": request_id, "result": handle_tool_call(params.get("name", ""), params.get("arguments", {}))}
     elif method == "notifications/initialized": return {"jsonrpc": "2.0", "id": request_id, "result": {}}
@@ -367,7 +397,7 @@ def process_mcp_message(data):
 @app.route("/", methods=["GET"])
 def health():
     gateway_tools = fetch_gateway_tools()
-    return jsonify({"status": "healthy", "service": "grok-mcp", "version": "2.2.0", "transport": "HTTP/JSON", "api_configured": bool(XAI_API_KEY), "snowflake_connected": get_snowflake_connection() is not None, "gateway_url": SM_GATEWAY_URL, "gateway_tools": len(gateway_tools), "native_tools": len(NATIVE_TOOLS), "features": ["auto_logging", "hive_mind_read", "hive_mind_write", "hive_mind_search", "conversation_sync", "snowflake_analysis", "sm_gateway_access", "agentic_mode"]})
+    return jsonify({"status": "healthy", "service": "grok-mcp", "version": "2.2.1", "transport": "HTTP/JSON", "api_configured": bool(XAI_API_KEY), "snowflake_connected": get_snowflake_connection() is not None, "gateway_url": SM_GATEWAY_URL, "gateway_tools": len(gateway_tools), "native_tools": len(NATIVE_TOOLS), "features": ["auto_logging", "hive_mind_read", "hive_mind_write", "hive_mind_search", "conversation_sync", "snowflake_analysis", "sm_gateway_access", "agentic_mode", "enhanced_system_prompt"]})
 
 @app.route("/mcp", methods=["POST"])
 def mcp_handler():
@@ -380,5 +410,5 @@ def mcp_handler():
         return jsonify({"jsonrpc": "2.0", "id": 1, "error": {"code": -32603, "message": str(e)}}), 500
 
 if __name__ == "__main__":
-    logger.info("Grok MCP Server v2.2.0 - SM Gateway integration enabled")
+    logger.info("Grok MCP Server v2.2.1 - Enhanced system prompt enabled")
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), debug=False, threaded=True)
