@@ -1,5 +1,5 @@
 """
-Grok MCP Server for Sovereign Mind v2.2.1
+Grok MCP Server for Sovereign Mind v2.2.2
 ==========================================
 HTTP JSON transport for the SM Gateway.
 Features:
@@ -9,6 +9,7 @@ Features:
 - Grok can query Snowflake data directly
 - Grok has access to ALL SM Gateway tools (176+ tools)
 - Enhanced system prompt so Grok knows his capabilities
+- CORS enabled for browser-based chat interfaces
 """
 
 import os
@@ -17,6 +18,7 @@ import httpx
 import time
 import uuid
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import logging
 from datetime import datetime
 
@@ -24,6 +26,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS for browser access
 
 XAI_API_KEY = os.environ.get("XAI_API_KEY")
 XAI_BASE_URL = "https://api.x.ai/v1"
@@ -388,7 +391,7 @@ def process_mcp_message(data):
     method = data.get("method", "")
     params = data.get("params", {})
     request_id = data.get("id", 1)
-    if method == "initialize": return {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "grok-mcp", "version": "2.2.1"}}}
+    if method == "initialize": return {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "grok-mcp", "version": "2.2.2"}}}
     elif method == "tools/list": return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": NATIVE_TOOLS}}
     elif method == "tools/call": return {"jsonrpc": "2.0", "id": request_id, "result": handle_tool_call(params.get("name", ""), params.get("arguments", {}))}
     elif method == "notifications/initialized": return {"jsonrpc": "2.0", "id": request_id, "result": {}}
@@ -397,10 +400,12 @@ def process_mcp_message(data):
 @app.route("/", methods=["GET"])
 def health():
     gateway_tools = fetch_gateway_tools()
-    return jsonify({"status": "healthy", "service": "grok-mcp", "version": "2.2.1", "transport": "HTTP/JSON", "api_configured": bool(XAI_API_KEY), "snowflake_connected": get_snowflake_connection() is not None, "gateway_url": SM_GATEWAY_URL, "gateway_tools": len(gateway_tools), "native_tools": len(NATIVE_TOOLS), "features": ["auto_logging", "hive_mind_read", "hive_mind_write", "hive_mind_search", "conversation_sync", "snowflake_analysis", "sm_gateway_access", "agentic_mode", "enhanced_system_prompt"]})
+    return jsonify({"status": "healthy", "service": "grok-mcp", "version": "2.2.2", "transport": "HTTP/JSON", "api_configured": bool(XAI_API_KEY), "snowflake_connected": get_snowflake_connection() is not None, "gateway_url": SM_GATEWAY_URL, "gateway_tools": len(gateway_tools), "native_tools": len(NATIVE_TOOLS), "features": ["auto_logging", "hive_mind_read", "hive_mind_write", "hive_mind_search", "conversation_sync", "snowflake_analysis", "sm_gateway_access", "agentic_mode", "enhanced_system_prompt", "cors_enabled"]})
 
-@app.route("/mcp", methods=["POST"])
+@app.route("/mcp", methods=["POST", "OPTIONS"])
 def mcp_handler():
+    if request.method == "OPTIONS":
+        return "", 200
     try:
         data = request.get_json()
         if not data: return jsonify({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}), 400
@@ -410,5 +415,5 @@ def mcp_handler():
         return jsonify({"jsonrpc": "2.0", "id": 1, "error": {"code": -32603, "message": str(e)}}), 500
 
 if __name__ == "__main__":
-    logger.info("Grok MCP Server v2.2.1 - Enhanced system prompt enabled")
+    logger.info("Grok MCP Server v2.2.2 - CORS enabled for browser access")
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), debug=False, threaded=True)
