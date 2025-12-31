@@ -142,6 +142,11 @@ def get_snowflake_connection():
                 warehouse=SNOWFLAKE_WAREHOUSE,
                 role=SNOWFLAKE_ROLE
             )
+            # Explicitly set warehouse after connect
+            cursor = _snowflake_conn.cursor()
+            cursor.execute(f"USE WAREHOUSE {SNOWFLAKE_WAREHOUSE}")
+            cursor.execute(f"USE DATABASE {SNOWFLAKE_DATABASE}")
+            cursor.close()
             logger.info("Snowflake connection established")
         except Exception as e:
             logger.error(f"Snowflake connection failed: {e}")
