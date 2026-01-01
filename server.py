@@ -304,9 +304,15 @@ def mcp_endpoint():
         native_tools = [
             {"name": "grok_chat", "description": "Chat with Grok AI", "inputSchema": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}},
             {"name": "grok_hive_mind_sync", "description": "Query with Hive Mind context", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
-            {"name": "grok_hive_mind_write", "description": "Write to Hive Mind", "inputSchema": {"type": "object", "properties": {"category": {"type": "string"}, "summary": {"type": "string"}}, "required": ["category", "summary"]}},
-            {"name": "grok_query_snowflake", "description": "Query Snowflake database", "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}, "required": ["sql"]}},
-            {"name": "grok_list_gateway_tools", "description": "List all SM Gateway tools", "inputSchema": {"type": "object", "properties": {}}}
+            {"name": "grok_hive_mind_write", "description": "Write to Hive Mind", "inputSchema": {"type": "object", "properties": {"category": {"type": "string"}, "summary": {"type": "string"}, "workstream": {"type": "string"}, "priority": {"type": "string"}}, "required": ["category", "summary"]}},
+            {"name": "grok_hive_mind_search", "description": "Search Hive Mind by keywords", "inputSchema": {"type": "object", "properties": {"keywords": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["keywords"]}},
+            {"name": "grok_query_snowflake", "description": "Execute SQL query on Snowflake (REDUNDANT - works even if gateway down)", "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}, "required": ["sql"]}},
+            {"name": "grok_list_gateway_tools", "description": "List all SM Gateway tools", "inputSchema": {"type": "object", "properties": {}}},
+            # Direct Snowflake MCP tools - REDUNDANCY for when gateway is unavailable
+            {"name": "sm_query_snowflake", "description": "[DIRECT] Execute SQL on Snowflake - bypasses gateway", "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}, "required": ["sql"]}},
+            {"name": "sm_hive_mind_read", "description": "[DIRECT] Read from HIVE_MIND table", "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer"}, "category": {"type": "string"}, "workstream": {"type": "string"}}, "required": []}},
+            {"name": "sm_hive_mind_write", "description": "[DIRECT] Write to HIVE_MIND table", "inputSchema": {"type": "object", "properties": {"source": {"type": "string"}, "category": {"type": "string"}, "summary": {"type": "string"}, "workstream": {"type": "string"}, "priority": {"type": "string"}, "details": {"type": "object"}}, "required": ["source", "category", "summary"]}},
+            {"name": "sm_credentials_lookup", "description": "[DIRECT] Lookup credentials from MASTER_CREDENTIALS", "inputSchema": {"type": "object", "properties": {"service_name": {"type": "string"}}, "required": ["service_name"]}}
         ]
         gateway_tools = get_gateway_tools()
         all_tools = native_tools + gateway_tools
@@ -322,14 +328,34 @@ def mcp_endpoint():
             context = query_hive_mind(5)
             return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": f"Hive Mind Context:\n{context}"}]}})
         elif tool_name == "grok_hive_mind_write":
-            success = write_to_hive_mind("GROK", arguments.get("category", "INSIGHT"), arguments.get("summary", ""))
+            success = write_to_hive_mind("GROK", arguments.get("category", "INSIGHT"), arguments.get("summary", ""),
+                                        workstream=arguments.get("workstream", "GENERAL"),
+                                        priority=arguments.get("priority", "MEDIUM"))
             return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": "Written to Hive Mind" if success else "Failed"}]}})
-        elif tool_name == "grok_query_snowflake":
+        elif tool_name == "grok_hive_mind_search":
+            return handle_hive_mind_search(arguments.get("keywords", ""), arguments.get("limit", 10), req_id)
+        elif tool_name in ["grok_query_snowflake", "sm_query_snowflake"]:
             return handle_snowflake_query(arguments.get("sql", ""), req_id)
         elif tool_name == "grok_list_gateway_tools":
             tools = get_gateway_tools()
             tool_names = [t.get("name", "") for t in tools]
             return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": f"Gateway tools ({len(tools)}): {', '.join(tool_names[:50])}..."}]}})
+        # Direct Snowflake MCP tools - REDUNDANCY
+        elif tool_name == "sm_hive_mind_read":
+            return handle_hive_mind_read(arguments.get("limit", 10), arguments.get("category"), arguments.get("workstream"), req_id)
+        elif tool_name == "sm_hive_mind_write":
+            success = write_to_hive_mind(
+                source=arguments.get("source", "API"),
+                category=arguments.get("category", "INSIGHT"),
+                summary=arguments.get("summary", ""),
+                details=arguments.get("details"),
+                workstream=arguments.get("workstream", "GENERAL"),
+                priority=arguments.get("priority", "MEDIUM"),
+                tags=arguments.get("tags")
+            )
+            return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": json.dumps({"success": success})}]}})
+        elif tool_name == "sm_credentials_lookup":
+            return handle_credentials_lookup(arguments.get("service_name", ""), req_id)
         else:
             result = call_gateway_tool(tool_name, arguments)
             return jsonify({"jsonrpc": "2.0", "id": req_id, "result": result})
@@ -384,6 +410,75 @@ def handle_snowflake_query(sql: str, req_id: int):
         columns = [desc[0] for desc in cursor.description]
         result = {"columns": columns, "rows": [list(row) for row in rows[:100]], "row_count": len(rows)}
         return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": json.dumps(result, default=str)}]}})
+    except Exception as e:
+        return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"code": -1, "message": str(e)}})
+
+
+def handle_hive_mind_search(keywords: str, limit: int, req_id: int):
+    """Search Hive Mind by keywords"""
+    conn = get_snowflake_connection()
+    if conn is None:
+        return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"code": -1, "message": "Snowflake unavailable"}})
+    try:
+        cursor = conn.cursor()
+        safe_keywords = keywords.replace("'", "''").lower()
+        sql = f"""SELECT CREATED_AT, SOURCE, CATEGORY, WORKSTREAM, SUMMARY 
+        FROM SOVEREIGN_MIND.RAW.HIVE_MIND 
+        WHERE LOWER(SUMMARY) LIKE '%{safe_keywords}%'
+        ORDER BY CREATED_AT DESC LIMIT {min(limit, 50)}"""
+        cursor.execute(sql)
+        rows = cursor.fetchall()
+        if not rows:
+            return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": f"No entries found matching '{keywords}'"}]}})
+        entries = [{"created_at": str(row[0]), "source": row[1], "category": row[2], "workstream": row[3], "summary": row[4]} for row in rows]
+        return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": json.dumps(entries, default=str)}]}})
+    except Exception as e:
+        return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"code": -1, "message": str(e)}})
+
+
+def handle_hive_mind_read(limit: int, category: str, workstream: str, req_id: int):
+    """Read from Hive Mind with optional filters"""
+    conn = get_snowflake_connection()
+    if conn is None:
+        return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"code": -1, "message": "Snowflake unavailable"}})
+    try:
+        cursor = conn.cursor()
+        where_clauses = []
+        if category:
+            where_clauses.append(f"CATEGORY = '{category}'")
+        if workstream:
+            where_clauses.append(f"WORKSTREAM = '{workstream}'")
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        sql = f"""SELECT CREATED_AT, SOURCE, CATEGORY, WORKSTREAM, SUMMARY, PRIORITY 
+        FROM SOVEREIGN_MIND.RAW.HIVE_MIND 
+        {where_sql}
+        ORDER BY CREATED_AT DESC LIMIT {min(limit, 50)}"""
+        cursor.execute(sql)
+        rows = cursor.fetchall()
+        entries = [{"created_at": str(row[0]), "source": row[1], "category": row[2], "workstream": row[3], "summary": row[4], "priority": row[5]} for row in rows]
+        return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": json.dumps(entries, default=str)}]}})
+    except Exception as e:
+        return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"code": -1, "message": str(e)}})
+
+
+def handle_credentials_lookup(service_name: str, req_id: int):
+    """Lookup credentials from MASTER_CREDENTIALS - returns non-sensitive fields only"""
+    conn = get_snowflake_connection()
+    if conn is None:
+        return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"code": -1, "message": "Snowflake unavailable"}})
+    try:
+        cursor = conn.cursor()
+        safe_service = service_name.replace("'", "''").lower()
+        sql = f"""SELECT SERVICE_NAME, USERNAME, ENDPOINT, NOTES, UPDATED_AT 
+        FROM SOVEREIGN_MIND.CREDENTIALS.MASTER_CREDENTIALS 
+        WHERE LOWER(SERVICE_NAME) LIKE '%{safe_service}%'
+        LIMIT 10"""
+        cursor.execute(sql)
+        rows = cursor.fetchall()
+        if not rows:
+            return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": f"No credentials found for '{service_name}'"}]}})
+        creds = [{"service": row[0], "username": row[1], "endpoint": row[2], "notes": row[3], "updated": str(row[4])} for row in rows]
+        return jsonify({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": json.dumps(creds, default=str)}]}})
     except Exception as e:
         return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"code": -1, "message": str(e)}})
 
